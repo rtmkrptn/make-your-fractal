@@ -45,6 +45,28 @@ body,
   display: block;
 }
 
+.github-star-link {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 999px;
+  text-decoration: none;
+}
+
+.github-star-link:hover {
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+}
+
 .canvas-hint {
   position: absolute;
   left: 50%;
@@ -76,6 +98,90 @@ body,
 
 .theme-toggle-btn {
   border-radius: 50% !important;
+}
+
+.render-mode-control {
+  position: relative;
+}
+
+/* Primer's SegmentedControl leaves its own outer track at overflow:visible,
+   so any sub-pixel seam/separator remnant at the edge of the selected pill
+   can leak a hairline past the track's rounded corner. Clipping to the same
+   radius it already declares removes that without changing its shape. */
+[aria-label='Rendering precision'] {
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.render-mode-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  background: var(--bgColor-default);
+  border: 1px solid var(--borderColor-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-floating-small, 0 4px 12px rgba(0, 0, 0, 0.2));
+  padding: 8px 10px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.render-mode-tip.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.render-mode-tip table {
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.render-mode-tip th,
+.render-mode-tip td {
+  padding: 4px 10px;
+  text-align: center;
+  border: 1px solid var(--borderColor-muted, var(--borderColor-default));
+}
+
+.render-mode-tip thead th {
+  color: var(--fgColor-muted);
+  font-weight: 500;
+  border-top: none;
+}
+
+.render-mode-tip thead th:first-child {
+  border-left: none;
+  border-top: none;
+}
+
+.render-mode-tip tbody th {
+  text-align: left;
+  color: var(--fgColor-default);
+  font-weight: 500;
+  padding-right: 12px;
+  border-left: none;
+}
+
+.render-mode-tip tr:last-child td,
+.render-mode-tip tr:last-child th {
+  border-bottom: none;
+}
+
+.render-mode-tip tr :last-child {
+  border-right: none;
+}
+
+.render-mode-tip .tip-yes {
+  color: var(--fgColor-success, #1a7f37);
+}
+
+.render-mode-tip .tip-no {
+  color: var(--fgColor-danger, #cf222e);
 }
 
 /* Primer's fullWidth SegmentedControl sets flex-grow:1 on each item but
@@ -242,6 +348,8 @@ body,
   height: auto;
   aspect-ratio: 1 / 1;
   display: block;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .c-inputs {
@@ -252,4 +360,39 @@ body,
 
 .c-inputs span {
   color: var(--fgColor-muted);
+}
+
+.controls-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.share-menu {
+  position: relative;
+}
+
+.share-menu-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+  background: var(--bgColor-default);
+  border: 1px solid var(--borderColor-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-floating-small, 0 4px 12px rgba(0, 0, 0, 0.2));
+  padding: 10px;
+}
+
+.share-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fgColor-default);
 }

@@ -49,6 +49,7 @@ export interface FractalRenderer {
   usingPerturbation: boolean
   resetView: () => void
   downloadPNG: (filename?: string) => void
+  getView: () => ViewState
 }
 
 const DEFAULT_VIEW: ViewState = { cx: -0.5, cy: 0, scale: 1.5 }
@@ -517,6 +518,8 @@ export function useFractalRenderer(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewResetSignal])
 
+  const getView = useCallback(() => ({ ...viewRef.current }), [])
+
   const downloadPNG = useCallback((filename = 'fractal.png') => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -533,7 +536,7 @@ export function useFractalRenderer(
   }, [draw])
 
   return useMemo(
-    () => ({ canvasRef, glError, isReady, usingPerturbation, resetView, downloadPNG }),
-    [glError, isReady, usingPerturbation, resetView, downloadPNG],
+    () => ({ canvasRef, glError, isReady, usingPerturbation, resetView, downloadPNG, getView }),
+    [glError, isReady, usingPerturbation, resetView, downloadPNG, getView],
   )
 }

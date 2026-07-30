@@ -1,21 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconButton, SegmentedControl, useTheme } from '@primer/react'
-import { SunIcon, MoonIcon } from '@primer/octicons-react'
+import { SunIcon, MoonIcon, MarkGithubIcon, StarIcon } from '@primer/octicons-react'
 import { Mode, AverageState } from './types'
 import { PRESETS, DEFAULT_PRESET } from './examples/presets'
 import { compileAverageMode, compileProgram } from './dsl/compiler'
-import {
-  extractPerturbableFromAverage,
-  extractPerturbableFromProgram,
-  compilePerturbation,
-  explainNerdIneligibility,
-  explainAverageIneligibility,
-} from './dsl/perturbation'
+import { extractPerturbableFromAverage, extractPerturbableFromProgram, compilePerturbation } from './dsl/perturbation'
 import { useFractalRenderer, CompiledPipeline, RenderMode } from './render/useFractalRenderer'
 import { AverageMode } from './modes/AverageMode'
 import { NerdMode } from './modes/NerdMode'
 import { ControlsPanel } from './components/ControlsPanel'
 import { ErrorBanner } from './components/ErrorBanner'
+import { buildShareUrl, parseShareParams, ShareOptions } from './shareState'
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
@@ -40,17 +35,28 @@ function ThemeToggle() {
 }
 
 export default function App() {
-  const [mode, setMode] = useState<Mode>('average')
+  // A shared link (see ShareMenu/shareState.ts) can seed any subset of the
+  // fractal definition, pan/zoom position, and color palette via URL query
+  // params — whatever isn't present just falls back to the default preset.
+  const shared = useMemo(() => parseShareParams(window.location.search), [])
+
+  const [mode, setMode] = useState<Mode>(shared.mode ?? 'average')
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_PRESET.id)
-  const [averageState, setAverageState] = useState<AverageState>(DEFAULT_PRESET.average!)
-  const [nerdSource, setNerdSource] = useState(DEFAULT_PRESET.nerd)
-  const [view, setView] = useState(DEFAULT_PRESET.view)
+  const [averageState, setAverageState] = useState<AverageState>(shared.average ?? DEFAULT_PRESET.average!)
+  const [nerdSource, setNerdSource] = useState(shared.nerd ?? DEFAULT_PRESET.nerd)
+  const [view, setView] = useState(shared.view ?? DEFAULT_PRESET.view)
   const [viewResetSignal, setViewResetSignal] = useState(0)
-  const [maxIter, setMaxIter] = useState(DEFAULT_PRESET.maxIter)
-  const [bailout, setBailout] = useState(DEFAULT_PRESET.bailout)
-  const [colorScheme, setColorScheme] = useState(DEFAULT_PRESET.colorScheme)
-  const [juliaC, setJuliaC] = useState(DEFAULT_PRESET.juliaC)
+  const [maxIter, setMaxIter] = useState(shared.maxIter ?? DEFAULT_PRESET.maxIter)
+  const [bailout, setBailout] = useState(shared.bailout ?? DEFAULT_PRESET.bailout)
+  const [colorScheme, setColorScheme] = useState(shared.colorScheme ?? DEFAULT_PRESET.colorScheme)
+  const [juliaC, setJuliaC] = useState(shared.juliaC ?? DEFAULT_PRESET.juliaC)
   const [renderMode, setRenderMode] = useState<RenderMode>('deepZoom')
+  // Tracked in JS rather than a pure CSS :hover rule: clicking a Simple/Deep
+  // button re-renders the SegmentedControl, and some browsers don't
+  // re-evaluate :hover on an element until the next mousemove — the tooltip
+  // could drop out right after a click even though the pointer never left.
+  // mouseenter/leave don't have that gap.
+  const [showRenderModeTip, setShowRenderModeTip] = useState(false)
 
   const debouncedAverage = useDebounced(averageState, 250)
   const debouncedNerd = useDebounced(nerdSource, 250)
@@ -72,7 +78,6 @@ export default function App() {
           : extractPerturbableFromProgram(debouncedNerd)
 
       let perturbation: CompiledPipeline['perturbation'] = null
-      let perturbationBlockedReason: string | null = null
       if (perturbable) {
         try {
           const pert = compilePerturbation(perturbable.fExpr, perturbable.z0Expr)
@@ -80,17 +85,12 @@ export default function App() {
         } catch (e) {
           console.warn('Perturbation-eligible formula failed to compile a delta function; deep zoom will stay at plain float32 depth.', e)
         }
-      } else {
-        perturbationBlockedReason =
-          mode === 'average'
-            ? explainAverageIneligibility(debouncedAverage.f, debouncedAverage.z0)
-            : explainNerdIneligibility(debouncedNerd)
       }
 
       const pipeline: CompiledPipeline = { userGlsl: plain.glsl, perturbation }
-      return { pipeline, error: null as string | null, perturbationBlockedReason }
+      return { pipeline, error: null as string | null }
     } catch (e) {
-      return { pipeline: null as CompiledPipeline | null, error: e instanceof Error ? e.message : String(e), perturbationBlockedReason: null as string | null }
+      return { pipeline: null as CompiledPipeline | null, error: e instanceof Error ? e.message : String(e) }
     }
   }, [mode, debouncedAverage, debouncedNerd])
 
@@ -105,7 +105,7 @@ export default function App() {
     [maxIter, bailout, colorScheme, juliaC, renderMode],
   )
 
-  const { canvasRef, glError, resetView, downloadPNG } = useFractalRenderer(
+  const { canvasRef, glError, resetView, downloadPNG, getView } = useFractalRenderer(
     pipelineToRender,
     params,
     view,
@@ -130,8 +130,11 @@ export default function App() {
     setViewResetSignal((v) => v + 1)
   }
 
-  const handleShare = () => {
-    const url = window.location.href
+  const handleShare = (options: ShareOptions) => {
+    const url = buildShareUrl(
+      { mode, average: averageState, nerd: nerdSource, juliaC, maxIter, bailout, view: getView(), colorScheme },
+      options,
+    )
     if (navigator.share) {
       navigator.share({ title: 'Fractal Forge', url }).catch(() => {})
     } else {
@@ -146,22 +149,57 @@ export default function App() {
       <div className="app-main">
         <div className="canvas-wrap">
           <canvas ref={canvasRef} />
+          <a
+            className="github-star-link"
+            href="https://github.com/rtmkrptn/makeyourfractal"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <MarkGithubIcon size={16} />
+            Star on GitHub
+            <StarIcon size={14} />
+          </a>
           <div className="canvas-hint">Scroll to zoom · drag to pan</div>
           <div className="precision-badge-wrap">
             <ThemeToggle />
-            <SegmentedControl
-              aria-label="Rendering precision"
-              onChange={(i) => setRenderMode(i === 0 ? 'simple' : 'deepZoom')}
+            <div
+              className="render-mode-control"
+              onMouseEnter={() => setShowRenderModeTip(true)}
+              onMouseLeave={() => setShowRenderModeTip(false)}
+              onFocus={() => setShowRenderModeTip(true)}
+              onBlur={() => setShowRenderModeTip(false)}
             >
-              <SegmentedControl.Button selected={renderMode === 'simple'}>Simple</SegmentedControl.Button>
-              <SegmentedControl.Button
-                selected={renderMode === 'deepZoom'}
-                disabled={!pipelineToRender?.perturbation}
-                title={!pipelineToRender?.perturbation ? (compiled.perturbationBlockedReason ?? undefined) : undefined}
+              <SegmentedControl
+                aria-label="Rendering precision"
+                onChange={(i) => setRenderMode(i === 0 ? 'simple' : 'deepZoom')}
               >
-                Deep zoom
-              </SegmentedControl.Button>
-            </SegmentedControl>
+                <SegmentedControl.Button selected={renderMode === 'simple'}>Simple</SegmentedControl.Button>
+                <SegmentedControl.Button selected={renderMode === 'deepZoom'}>Deep</SegmentedControl.Button>
+              </SegmentedControl>
+              <div className={`render-mode-tip ${showRenderModeTip ? 'is-visible' : ''}`} role="tooltip">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col" />
+                      <th scope="col">Simple</th>
+                      <th scope="col">Deep</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <th scope="row">Stability</th>
+                      <td className="tip-yes">✓</td>
+                      <td className="tip-no">✗</td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Fidelity</th>
+                      <td className="tip-no">✗</td>
+                      <td className="tip-yes">✓</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 

@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TextInput } from '@primer/react'
 
 interface Props {
@@ -26,6 +26,31 @@ const PLANE_POINT_STROKE = 'var(--bgColor-default, #fff)'
 // exact values below. `range` is the half-extent shown (in complex-plane units).
 export function ComplexPointField({ value, onChange, range = 2 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
+
+  // Text shown in the two inputs is kept separate from the committed numeric
+  // `value` so the field can be cleared to empty (or sit on a partial value
+  // like "-" or "1.") without snapping back to a number every keystroke.
+  // Only synced from `value` when it actually changes from elsewhere (drag,
+  // preset), never as a reaction to our own commit below.
+  const [reText, setReText] = useState(String(value.re))
+  const [imText, setImText] = useState(String(value.im))
+
+  useEffect(() => setReText(String(value.re)), [value.re])
+  useEffect(() => setImText(String(value.im)), [value.im])
+
+  // While the text is empty or not a finished number, don't commit anything —
+  // the shader keeps rendering with whatever `c` it last had, rather than
+  // being forced through 0 on every keystroke of clearing the field.
+  const commitRe = (text: string) => {
+    setReText(text)
+    const n = Number(text)
+    if (text.trim() !== '' && Number.isFinite(n)) onChange({ ...value, re: n })
+  }
+  const commitIm = (text: string) => {
+    setImText(text)
+    const n = Number(text)
+    if (text.trim() !== '' && Number.isFinite(n)) onChange({ ...value, im: n })
+  }
 
   const fromEvent = (e: React.PointerEvent<SVGSVGElement>) => {
     const rect = svgRef.current!.getBoundingClientRect()
@@ -78,24 +103,32 @@ export function ComplexPointField({ value, onChange, range = 2 }: Props) {
           })}
           <line x1={SIZE / 2} y1={0} x2={SIZE / 2} y2={SIZE} stroke={PLANE_AXIS} strokeWidth={1.5} />
           <line x1={0} y1={SIZE / 2} x2={SIZE} y2={SIZE / 2} stroke={PLANE_AXIS} strokeWidth={1.5} />
-          <circle cx={point.x} cy={point.y} r={10} fill={PLANE_POINT} stroke={PLANE_POINT_STROKE} strokeWidth={2.5} />
+          <circle
+            cx={point.x}
+            cy={point.y}
+            r={6}
+            fill={PLANE_POINT}
+            stroke={PLANE_POINT_STROKE}
+            strokeWidth={2}
+            style={{ transition: 'none' }}
+          />
         </svg>
         <div className="c-inputs">
           <TextInput
-            type="number"
-            step={0.01}
-            value={value.re}
-            onChange={(e) => onChange({ ...value, re: Number(e.target.value) })}
+            type="text"
+            inputMode="decimal"
+            value={reText}
+            onChange={(e) => commitRe(e.target.value)}
             aria-label="c real part"
             monospace
             style={{ width: 88 }}
           />
           <span>+</span>
           <TextInput
-            type="number"
-            step={0.01}
-            value={value.im}
-            onChange={(e) => onChange({ ...value, im: Number(e.target.value) })}
+            type="text"
+            inputMode="decimal"
+            value={imText}
+            onChange={(e) => commitIm(e.target.value)}
             aria-label="c imaginary part"
             monospace
             style={{ width: 88 }}

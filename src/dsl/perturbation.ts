@@ -16,7 +16,7 @@
 // precision (capped at the same ~1e-6 depth as before perturbation existed).
 
 import Decimal from 'decimal.js'
-import { Expr, FunctionDef, Stmt } from './ast'
+import { Expr, FunctionDef } from './ast'
 import { DslError } from './errors'
 import { parseProgram, parseSingleExpr } from './parser'
 import { FunctionCompiler, GlslType, tryLiteralInt } from './compiler'
@@ -94,21 +94,6 @@ function singleReturnExpr(fn: FunctionDef): Expr | null {
   return fn.body[0].value
 }
 
-/** Why `body` isn't a single `return <expression>`, or null if it is. */
-function describeStmtShapeBlocker(body: Stmt[]): string | null {
-  if (body.length === 1 && body[0].kind === 'return') return null
-  if (body.length !== 1) {
-    return `must be a single 'return <expression>' — deep zoom can't follow multiple statements (found ${body.length})`
-  }
-  const label: Record<Stmt['kind'], string> = {
-    assign: 'a local variable assignment',
-    if: 'an if/elif/else',
-    for: 'a for loop',
-    return: 'return', // unreachable: body[0].kind === 'return' is handled above
-  }
-  return `must be a single 'return <expression>' — found ${label[body[0].kind]} instead, which deep zoom can't follow`
-}
-
 export interface PerturbableExprs {
   fExpr: Expr
   z0Expr: Expr
@@ -146,52 +131,6 @@ export function extractPerturbableFromAverage(fExprSrc: string, z0ExprSrc: strin
   }
   if (!isPerturbable(fExpr) || !isPerturbable(z0Expr)) return null
   return { fExpr, z0Expr }
-}
-
-/**
- * Why Nerd-mode `source` can't use deep zoom, or null if it's eligible (or
- * has a parse/definition error already surfaced elsewhere by the plain
- * compiler — this only explains *perturbation-specific* disqualifications).
- */
-export function explainNerdIneligibility(source: string): string | null {
-  let program
-  try {
-    program = parseProgram(source)
-  } catch {
-    return null
-  }
-  const fFn = program.functions.get('f')
-  if (!fFn) return null
-  const fShape = describeStmtShapeBlocker(fFn.body)
-  if (fShape) return `f(): ${fShape}`
-  const fBlocker = describeExprBlocker(singleReturnExpr(fFn)!)
-  if (fBlocker) return `f(): ${fBlocker}`
-
-  const z0Fn = program.functions.get('z0')
-  if (z0Fn) {
-    const z0Shape = describeStmtShapeBlocker(z0Fn.body)
-    if (z0Shape) return `z0(): ${z0Shape}`
-    const z0Blocker = describeExprBlocker(singleReturnExpr(z0Fn)!)
-    if (z0Blocker) return `z0(): ${z0Blocker}`
-  }
-  return null
-}
-
-/** Why Average-mode's f/z0 fields can't use deep zoom, or null if eligible. */
-export function explainAverageIneligibility(fExprSrc: string, z0ExprSrc: string): string | null {
-  let fExpr: Expr
-  let z0Expr: Expr
-  try {
-    fExpr = parseSingleExpr(fExprSrc)
-    z0Expr = parseSingleExpr(z0ExprSrc)
-  } catch {
-    return null
-  }
-  const fBlocker = describeExprBlocker(fExpr)
-  if (fBlocker) return `f: ${fBlocker}`
-  const z0Blocker = describeExprBlocker(z0Expr)
-  if (z0Blocker) return `z0: ${z0Blocker}`
-  return null
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 import { Button, ButtonGroup, FormControl, Select } from '@primer/react'
-import { DownloadIcon, ShareIcon, SyncIcon } from '@primer/octicons-react'
+import { DownloadIcon, SyncIcon } from '@primer/octicons-react'
 import { Preset } from '../types'
 import { PALETTE_NAMES } from '../render/shaderTemplate'
+import { ShareMenu } from './ShareMenu'
+import { ShareOptions } from '../shareState'
 
 interface Props {
   presets: Preset[]
@@ -13,7 +15,7 @@ interface Props {
   onColorSchemeChange: (v: number) => void
   onResetView: () => void
   onDownloadPNG: () => void
-  onShare: () => void
+  onShare: (options: ShareOptions) => void
 }
 
 export function ControlsPanel({
@@ -65,17 +67,17 @@ export function ControlsPanel({
         </Select>
       </FormControl>
 
-      <ButtonGroup>
-        <Button leadingVisual={SyncIcon} onClick={onResetView}>
-          Reset view
-        </Button>
-        <Button leadingVisual={DownloadIcon} onClick={onDownloadPNG}>
-          Download PNG
-        </Button>
-        <Button leadingVisual={ShareIcon} onClick={onShare}>
-          Share
-        </Button>
-      </ButtonGroup>
+      <div className="controls-actions-row">
+        <ButtonGroup>
+          <Button leadingVisual={SyncIcon} onClick={onResetView}>
+            Reset view
+          </Button>
+          <Button leadingVisual={DownloadIcon} onClick={onDownloadPNG}>
+            Download PNG
+          </Button>
+        </ButtonGroup>
+        <ShareMenu onShare={onShare} />
+      </div>
     </div>
   )
 }
