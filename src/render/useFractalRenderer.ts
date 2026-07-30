@@ -435,14 +435,67 @@ export function useFractalRenderer(
     let lastX = 0
     let lastY = 0
 
+    // Two simultaneous pointers (touch) pinch-zoom instead of panning — each
+    // move compares against the previous frame's distance/midpoint rather
+    // than the pinch's starting values, so it behaves like the wheel handler
+    // (a running series of small zoom steps) instead of one big jump.
+    const activePointers = new Map<number, { x: number; y: number }>()
+    let pinch: { dist: number; midX: number; midY: number } | null = null
+
+    const zoomAt = (clientX: number, clientY: number, factor: number) => {
+      const rect = canvas.getBoundingClientRect()
+      const uvx = (clientX - rect.left - 0.5 * rect.width) / rect.height
+      const uvy = -(clientY - rect.top - 0.5 * rect.height) / rect.height
+      const v = viewRef.current
+      const minScale =
+        compiledRef.current?.perturbation && paramsRef.current.renderMode === 'deepZoom' ? MIN_SCALE_ELIGIBLE : MIN_SCALE_PLAIN
+      const newScale = Math.min(MAX_SCALE, Math.max(minScale, v.scale * factor))
+      v.cx += uvx * 2 * (v.scale - newScale)
+      v.cy += uvy * 2 * (v.scale - newScale)
+      v.scale = newScale
+    }
+
     const onPointerDown = (e: PointerEvent) => {
-      dragging = true
-      lastX = e.clientX
-      lastY = e.clientY
-      canvas.setPointerCapture(e.pointerId)
-      canvas.style.cursor = 'grabbing'
+      try {
+        canvas.setPointerCapture(e.pointerId)
+      } catch {
+        /* no-op */
+      }
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+      if (activePointers.size === 2) {
+        dragging = false
+        const [a, b] = [...activePointers.values()]
+        pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y), midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 }
+      } else if (activePointers.size === 1) {
+        dragging = true
+        lastX = e.clientX
+        lastY = e.clientY
+        canvas.style.cursor = 'grabbing'
+      }
     }
     const onPointerMove = (e: PointerEvent) => {
+      if (!activePointers.has(e.pointerId)) return
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (activePointers.size >= 2) {
+        const [a, b] = [...activePointers.values()]
+        const dist = Math.hypot(a.x - b.x, a.y - b.y)
+        const midX = (a.x + b.x) / 2
+        const midY = (a.y + b.y) / 2
+        if (pinch && pinch.dist > 0) {
+          const rect = canvas.getBoundingClientRect()
+          const v = viewRef.current
+          zoomAt(midX, midY, pinch.dist / dist)
+          const dx = midX - pinch.midX
+          const dy = midY - pinch.midY
+          v.cx -= (dx / rect.height) * v.scale * 2
+          v.cy += (dy / rect.height) * v.scale * 2
+          markInteraction()
+        }
+        pinch = { dist, midX, midY }
+        return
+      }
+
       if (!dragging) return
       const rect = canvas.getBoundingClientRect()
       const dx = e.clientX - lastX
@@ -455,33 +508,34 @@ export function useFractalRenderer(
       markInteraction()
     }
     const endDrag = (e: PointerEvent) => {
-      dragging = false
-      canvas.style.cursor = 'grab'
+      activePointers.delete(e.pointerId)
       try {
         canvas.releasePointerCapture(e.pointerId)
       } catch {
         /* no-op */
       }
+      pinch = null
+      if (activePointers.size === 1) {
+        // Resume single-finger panning from the remaining pointer's current
+        // position so it doesn't jump using stale coordinates from before.
+        const [remaining] = [...activePointers.values()]
+        dragging = true
+        lastX = remaining.x
+        lastY = remaining.y
+      } else {
+        dragging = false
+        canvas.style.cursor = 'grab'
+      }
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const rect = canvas.getBoundingClientRect()
-      const uvx = (e.clientX - rect.left - 0.5 * rect.width) / rect.height
-      const uvy = -(e.clientY - rect.top - 0.5 * rect.height) / rect.height
-      const v = viewRef.current
-      const minScale =
-        compiledRef.current?.perturbation && paramsRef.current.renderMode === 'deepZoom' ? MIN_SCALE_ELIGIBLE : MIN_SCALE_PLAIN
       // Clamp per-event delta so a single large burst (trackpad inertial
       // scrolling can fire many events, or occasionally one huge one) can't
       // blow through many zoom levels at once — the fractal boundary is
       // infinitely thin, so overshooting it in one jump lands you in a flat
       // "wasteland" with no way to tell which direction detail went.
       const clampedDelta = Math.max(-WHEEL_DELTA_CLAMP, Math.min(WHEEL_DELTA_CLAMP, e.deltaY))
-      const factor = Math.pow(WHEEL_ZOOM_RATE, clampedDelta)
-      const newScale = Math.min(MAX_SCALE, Math.max(minScale, v.scale * factor))
-      v.cx += uvx * 2 * (v.scale - newScale)
-      v.cy += uvy * 2 * (v.scale - newScale)
-      v.scale = newScale
+      zoomAt(e.clientX, e.clientY, Math.pow(WHEEL_ZOOM_RATE, clampedDelta))
       markInteraction()
     }
 
