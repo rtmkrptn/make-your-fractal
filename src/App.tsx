@@ -160,10 +160,6 @@ export default function App() {
             Star on GitHub
             <StarIcon size={14} />
           </a>
-          <div className="canvas-hint">
-            <span className="canvas-hint-mouse">Scroll to zoom · drag to pan</span>
-            <span className="canvas-hint-touch">Pinch to zoom · drag to pan</span>
-          </div>
           <ViewHud subscribeView={subscribeView} referenceScale={view.scale} />
           <div className="precision-badge-wrap">
             <ThemeToggle />

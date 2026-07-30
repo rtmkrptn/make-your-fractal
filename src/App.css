@@ -67,37 +67,6 @@ body,
   color: #fff;
 }
 
-.canvas-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 14px;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 12px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  pointer-events: none;
-  white-space: nowrap;
-}
-
-/* (pointer: coarse) is the touch-primary signal — a mouse/trackpad reports
-   "fine" even on a touch-enabled laptop, so this only swaps for devices
-   where "scroll to zoom" wouldn't otherwise mean anything. */
-.canvas-hint-touch {
-  display: none;
-}
-
-@media (pointer: coarse) {
-  .canvas-hint-mouse {
-    display: none;
-  }
-  .canvas-hint-touch {
-    display: inline;
-  }
-}
-
 .view-hud {
   position: absolute;
   left: 14px;
