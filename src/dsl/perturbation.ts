@@ -89,6 +89,53 @@ export function isPerturbable(expr: Expr): boolean {
   return describeExprBlocker(expr) === null
 }
 
+// Extra restrictions on top of describeExprBlocker for series approximation
+// (see computeSeriesApproximation below): abs()/conj()/re()/im()/.real/.imag
+// mix a value with its own conjugate, which isn't expressible as a power
+// series in the single complex variable dc this uses — and division isn't
+// expressible as an *exact* power series here either (mirrors why isExact is
+// false for it in the delta-compiler path). Formulas that hit this still
+// perturb normally; they just don't get the series-approximation speedup.
+function seriesBlockerInExpr(expr: Expr): string | null {
+  switch (expr.kind) {
+    case 'num':
+    case 'imag':
+    case 'name':
+    case 'bool':
+      return null
+    case 'attr':
+      return `uses .real/.imag, which deep-zoom series approximation doesn't support`
+    case 'unary':
+      return seriesBlockerInExpr(expr.operand)
+    case 'binary': {
+      if (expr.op === '/') return `uses '/', which deep-zoom series approximation doesn't support`
+      if (expr.op === '**') {
+        const n = tryLiteralInt(expr.right)
+        if (n !== null && n < 0) return `uses a negative exponent, which deep-zoom series approximation doesn't support`
+      }
+      return seriesBlockerInExpr(expr.left) || seriesBlockerInExpr(expr.right)
+    }
+    case 'compare':
+    case 'logical':
+    case 'ternary':
+      return null // unreachable once describeExprBlocker has already passed
+    case 'call': {
+      if (expr.callee === 'abs' || expr.callee === 'conj' || expr.callee === 're' || expr.callee === 'im' || expr.callee === 'complex') {
+        return `calls ${expr.callee}(), which deep-zoom series approximation doesn't support`
+      }
+      if (expr.callee === 'pow') {
+        const n = tryLiteralInt(expr.args[1])
+        if (n !== null && n < 0) return `calls pow() with a negative exponent, which deep-zoom series approximation doesn't support`
+      }
+      for (const a of expr.args) {
+        const blocker = seriesBlockerInExpr(a)
+        if (blocker) return blocker
+      }
+      return null
+    }
+  }
+}
+
 function singleReturnExpr(fn: FunctionDef): Expr | null {
   if (fn.body.length !== 1 || fn.body[0].kind !== 'return') return null
   return fn.body[0].value
@@ -324,6 +371,255 @@ export function computeReferenceOrbit(
   } finally {
     Decimal.set({ precision: prevPrecision })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Series approximation: one power series (in the pixel's dw), shared by every
+// pixel, that lets most of them skip straight past the early iterations
+// instead of walking delta_f from i=0. This is the classic deep-zoom
+// speedup (as in Kalles Fraktaler / Imagina): once maxIter is large, nearly
+// all of a pixel's cost is spent re-deriving behavior that looks the same
+// across the whole viewport, since the reference orbit dominates and the
+// per-pixel offset barely matters yet. Built once per settle, on the CPU,
+// right alongside the reference orbit.
+//
+// Represented as dz_n(dw) = A_1*dw + A_2*dw^2 + ... + A_K*dw^K (a plain
+// power series in the single complex variable dw, truncated to
+// SERIES_ORDER terms) — sound only for holomorphic formulas, hence
+// seriesBlockerInExpr above rejecting abs/conj/re/im/division. The
+// recurrence for the A_k themselves reuses the same exact product rule as
+// DeltaCompiler (d(ab) = a*db + da*b + da*db), just with "db" now a
+// truncated power series instead of a concrete number, which is what makes
+// the multiplication a (truncated) convolution instead of a single product.
+// ---------------------------------------------------------------------------
+
+export const SERIES_ORDER = 10
+// Bounds the one-time CPU cost of building the table: unlike the plain
+// reference orbit (O(1) Decimal ops per iteration), each step here costs
+// O(SERIES_ORDER^2) floating-point ops, and — for orbits that stay bounded a
+// long time, e.g. deep inside a mini-Mandelbrot — the series can in
+// principle remain valid for most of a very large maxIter. Stopping here
+// still leaves everything past this point to skip, just not quite as much.
+const SERIES_MAX_ITERS = 20000
+// Relative tolerance: keep extending the series while the highest-order
+// term's contribution at the viewport's outer edge (radius maxDw) stays
+// under this fraction of the linear term's there. This is a cheap heuristic,
+// not a rigorous error bound — once it trips, the truncated polynomial is
+// assumed to no longer track the true delta closely enough to trust.
+const SERIES_TOL = 1e-3
+
+interface Cplx {
+  re: number
+  im: number
+}
+
+function cAddN(a: Cplx, b: Cplx): Cplx {
+  return { re: a.re + b.re, im: a.im + b.im }
+}
+function cSubN(a: Cplx, b: Cplx): Cplx {
+  return { re: a.re - b.re, im: a.im - b.im }
+}
+function cMulN(a: Cplx, b: Cplx): Cplx {
+  return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }
+}
+function cNegN(a: Cplx): Cplx {
+  return { re: -a.re, im: -a.im }
+}
+
+// Index 0 is always zero (a delta series never carries a constant term — at
+// dw=0 every pixel's delta is exactly 0 by definition); indices 1..SERIES_ORDER
+// are the coefficients of dw^1..dw^SERIES_ORDER. Kept at length SERIES_ORDER+1
+// (rather than dropping index 0) purely so "coefficient of dw^d" can index by
+// d directly instead of d-1 everywhere below.
+type Series = Cplx[]
+
+function zeroSeries(): Series {
+  return Array.from({ length: SERIES_ORDER + 1 }, () => ({ re: 0, im: 0 }))
+}
+function identitySeries(): Series {
+  const s = zeroSeries()
+  s[1] = { re: 1, im: 0 }
+  return s
+}
+function seriesAddN(a: Series, b: Series): Series {
+  return a.map((v, i) => cAddN(v, b[i]))
+}
+function seriesSubN(a: Series, b: Series): Series {
+  return a.map((v, i) => cSubN(v, b[i]))
+}
+function seriesNegN(a: Series): Series {
+  return a.map(cNegN)
+}
+// Exact product rule, generalized from concrete numbers (DeltaCompiler.mul)
+// to truncated power series: coefficient of dw^d in (Lref+L(dw))*(Rref+R(dw))
+// is Lref*R[d] + L[d]*Rref + sum_{i=1}^{d-1} L[i]*R[d-i] — the last term is
+// where the truncation happens (contributions above dw^SERIES_ORDER are
+// simply not computed).
+function seriesMulN(lRef: Cplx, lSeries: Series, rRef: Cplx, rSeries: Series): Series {
+  const result = zeroSeries()
+  for (let d = 1; d <= SERIES_ORDER; d++) {
+    let acc = cAddN(cMulN(lRef, rSeries[d]), cMulN(lSeries[d], rRef))
+    for (let i = 1; i < d; i++) acc = cAddN(acc, cMulN(lSeries[i], rSeries[d - i]))
+    result[d] = acc
+  }
+  return result
+}
+
+interface SeriesVal {
+  ref: Cplx
+  series: Series
+}
+
+function seriesPowInt(base: SeriesVal, n: number): SeriesVal {
+  if (n === 0) return { ref: { re: 1, im: 0 }, series: zeroSeries() }
+  let result = base
+  for (let i = 1; i < n; i++) {
+    result = { ref: cMulN(result.ref, base.ref), series: seriesMulN(result.ref, result.series, base.ref, base.series) }
+  }
+  return result
+}
+
+/** Interprets expr with SeriesVal arithmetic. Only reachable node shapes are those seriesBlockerInExpr (and describeExprBlocker) allow through: num/imag/name/unary(-)/binary(+,-,*,** with a literal non-negative int)/call(pow). */
+function evalExprSeries(expr: Expr, env: Map<string, SeriesVal>): SeriesVal {
+  switch (expr.kind) {
+    case 'num':
+      return { ref: { re: expr.value, im: 0 }, series: zeroSeries() }
+    case 'imag':
+      return { ref: { re: 0, im: expr.value }, series: zeroSeries() }
+    case 'name': {
+      const v = env.get(expr.name)
+      if (v) return v
+      if (expr.name === 'pi') return { ref: { re: Math.PI, im: 0 }, series: zeroSeries() }
+      if (expr.name === 'e') return { ref: { re: Math.E, im: 0 }, series: zeroSeries() }
+      throw new DslError(`unknown name '${expr.name}'`, expr.line)
+    }
+    case 'unary': {
+      const o = evalExprSeries(expr.operand, env)
+      return { ref: cNegN(o.ref), series: seriesNegN(o.series) }
+    }
+    case 'binary': {
+      if (expr.op === '**') {
+        const l = evalExprSeries(expr.left, env)
+        const n = tryLiteralInt(expr.right) as number
+        return seriesPowInt(l, n)
+      }
+      const l = evalExprSeries(expr.left, env)
+      const r = evalExprSeries(expr.right, env)
+      if (expr.op === '+') return { ref: cAddN(l.ref, r.ref), series: seriesAddN(l.series, r.series) }
+      if (expr.op === '-') return { ref: cSubN(l.ref, r.ref), series: seriesSubN(l.series, r.series) }
+      return { ref: cMulN(l.ref, r.ref), series: seriesMulN(l.ref, l.series, r.ref, r.series) } // '*'
+    }
+    case 'call': {
+      const base = evalExprSeries(expr.args[0], env)
+      const n = tryLiteralInt(expr.args[1]) as number
+      return seriesPowInt(base, n)
+    }
+    default:
+      throw new DslError(`unsupported expression form for series approximation`, (expr as Expr).line)
+  }
+}
+
+export interface SeriesApproxResult {
+  // Interleaved (re, im) pairs for degree 1..SERIES_ORDER; length SERIES_ORDER*2.
+  coeffs: Float32Array
+  // Iteration index it's sound to jump a pixel to; 0 means "don't" (either
+  // the formula isn't eligible, or even the first term didn't look trustworthy).
+  skip: number
+}
+
+/**
+ * Builds the viewport-wide series described above. `wRef`/`c` are the same
+ * float32-precision anchor values the shader uses (not the arbitrary-
+ * precision Decimal originals) so the coefficients are computed against
+ * exactly what delta_f will see at iteration `skip` onward. `maxDw` is the
+ * largest |dw| any pixel in the current viewport can have — the caller
+ * (useFractalRenderer) derives this from the render's scale and aspect
+ * ratio; the table is only valid for pixels within that radius, which the
+ * shader checks per-pixel before using it.
+ *
+ * Not aware of rebasing (see PERTURBED_MAIN_REBASE in shaderTemplate.ts):
+ * the recurrence here mirrors delta_f's plain per-iteration form, not the
+ * rebase-and-restart one. In practice this isn't a gap — rebasing exists
+ * because a pixel's delta has grown too large relative to the reference,
+ * and that's exactly the condition SERIES_TOL is watching for too, so the
+ * series stops extending before a rebase would have been needed.
+ */
+export function computeSeriesApproximation(
+  fExpr: Expr,
+  z0Expr: Expr,
+  orbit: ReferenceOrbit,
+  wRef: { re: number; im: number },
+  c: { re: number; im: number },
+  bailout: number,
+  maxDw: number,
+): SeriesApproxResult {
+  const disabled: SeriesApproxResult = { coeffs: new Float32Array(SERIES_ORDER * 2), skip: 0 }
+  if (describeExprBlocker(fExpr) || describeExprBlocker(z0Expr) || seriesBlockerInExpr(fExpr) || seriesBlockerInExpr(z0Expr)) {
+    return disabled
+  }
+  if (!(maxDw > 0) || orbit.count === 0) return disabled
+
+  const isValid = (s: Series): boolean => {
+    let linear = 0
+    let top = 0
+    for (let d = 1; d <= SERIES_ORDER; d++) {
+      const mag = Math.hypot(s[d].re, s[d].im) * Math.pow(maxDw, d)
+      if (!Number.isFinite(mag)) return false
+      if (d === 1) linear = mag
+      top = mag
+    }
+    if (linear === 0) return true // e.g. z0 doesn't depend on w at all yet (plain Mandelbrot's z0=0) — not unsafe, just not informative yet
+    return top < SERIES_TOL * linear
+  }
+
+  const z0Env = new Map<string, SeriesVal>([
+    ['w', { ref: wRef, series: identitySeries() }],
+    ['c', { ref: c, series: zeroSeries() }],
+  ])
+  let current: SeriesVal
+  try {
+    current = evalExprSeries(z0Expr, z0Env)
+  } catch {
+    return disabled
+  }
+  if (!isValid(current.series)) return disabled
+
+  const cap = Math.min(orbit.count - 1, SERIES_MAX_ITERS)
+  const bailoutGuard2 = (bailout * 0.5) ** 2
+  let skip = 0
+
+  const fEnv = new Map<string, SeriesVal>([
+    ['w', { ref: wRef, series: identitySeries() }],
+    ['c', { ref: c, series: zeroSeries() }],
+  ])
+
+  for (let n = 0; n < cap; n++) {
+    const Zn: Cplx = { re: orbit.zRe[n], im: orbit.zIm[n] }
+    // Reference already close to escaping — stop extending here rather than
+    // risk jumping a pixel past the point where its true escape iteration
+    // (and hence its smooth-coloring value) would have mattered.
+    if (Zn.re * Zn.re + Zn.im * Zn.im > bailoutGuard2) break
+    fEnv.set('z', { ref: Zn, series: current.series })
+    fEnv.set('n', { ref: { re: n, im: 0 }, series: zeroSeries() })
+    let next: SeriesVal
+    try {
+      next = evalExprSeries(fExpr, fEnv)
+    } catch {
+      break
+    }
+    if (!isValid(next.series)) break
+    current = next
+    skip = n + 1
+  }
+
+  if (skip === 0) return disabled
+
+  const coeffs = new Float32Array(SERIES_ORDER * 2)
+  for (let d = 1; d <= SERIES_ORDER; d++) {
+    coeffs[(d - 1) * 2] = current.series[d].re
+    coeffs[(d - 1) * 2 + 1] = current.series[d].im
+  }
+  return { coeffs, skip }
 }
 
 // ---------------------------------------------------------------------------

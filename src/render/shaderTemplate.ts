@@ -13,6 +13,11 @@
 //    single float32 add that's always safe because both terms are
 //    comparable in magnitude at that point. See src/dsl/perturbation.ts for
 //    why this reaches far deeper zoom than raising precision ever could.
+//    Eligible formulas additionally get a series-approximation jump (see
+//    saEval/PERTURBED_MAIN_REBASE below) that skips most pixels straight to
+//    a later iteration instead of starting the delta_f loop at i=0.
+
+import { SERIES_ORDER } from '../dsl/perturbation'
 
 export const VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
@@ -144,6 +149,13 @@ uniform vec2 u_centerDrift;
 // live in deep zoom instead of frozen until the next CPU recompute.
 uniform vec2 u_cRef;
 uniform vec2 u_cDrift;
+// Series-approximation table (see computeSeriesApproximation in
+// perturbation.ts): u_saSkip <= 0 means "no table" (formula ineligible, or
+// even the first term wasn't trustworthy) — declared unconditionally like
+// the rest of this header, harmless to leave unused on the plain path.
+uniform vec2 u_saCoeffs[${SERIES_ORDER}];
+uniform int u_saSkip;
+uniform float u_saMaxDw2;
 out vec4 fragColor;
 `
 
@@ -158,15 +170,23 @@ out vec4 fragColor;
 // noise floor) is tight enough that a chaotic/escaping orbit essentially
 // never triggers it by accident: exponential sensitivity to initial
 // conditions means only a genuinely converged cycle returns this close.
-const PERIODICITY_INIT = `
+// `startVar` is the loop's actual starting iteration (0 normally; can be
+// >0 when a series-approximation jump skips straight past it — see
+// PERTURBED_MAIN_REBASE) — checkIter needs to start there too, and the
+// distance check needs to skip that first iteration specifically (not just
+// "i == 0"), or a jumped pixel would spuriously compare against an
+// uninitialized zCheck and break immediately.
+const PERIODICITY_INIT = (startVar: string) => `
   vec2 zCheck = vec2(0.0);
-  int checkIter = 0;
+  int checkIter = ${startVar};
+  bool periodFirst = true;
 `
 const PERIODICITY_CHECK = (zVar: string) => `
-    if (i > 0) {
+    if (!periodFirst) {
       vec2 dCheck = ${zVar} - zCheck;
       if (dot(dCheck, dCheck) < 1e-14) break;
     }
+    periodFirst = false;
     if (i == checkIter) { zCheck = ${zVar}; checkIter = checkIter == 0 ? 1 : checkIter * 2; }
 `
 
@@ -176,7 +196,7 @@ vec3 computePixel(vec2 w, vec2 c) {
   float bailout2 = u_bailout * u_bailout;
   bool escaped = false;
   int iter = 0;
-  ${PERIODICITY_INIT}
+  ${PERIODICITY_INIT('0')}
 
   for (int i = 0; i < 100000; i++) {
     if (i >= u_maxIter) break;
@@ -214,6 +234,19 @@ void main() {
 // human-scale) distance covered by one interactive gesture.
 const PERTURBED_UNIFORM = `
 uniform sampler2D u_refOrbit;
+
+// Series-approximation jump: evaluates the CPU-built polynomial
+// dz(dw) = A_1*dw + A_2*dw^2 + ... + A_SERIES_ORDER*dw^SERIES_ORDER via
+// Horner's method, so a pixel can start its delta_f loop at iteration
+// u_saSkip instead of 0 — see computeSeriesApproximation in perturbation.ts
+// for how the coefficients and skip point are chosen.
+vec2 saEval(vec2 dw) {
+  vec2 acc = u_saCoeffs[${SERIES_ORDER - 1}];
+  for (int k = ${SERIES_ORDER - 2}; k >= 0; k--) {
+    acc = cmul(acc, dw) + u_saCoeffs[k];
+  }
+  return cmul(dw, acc);
+}
 `
 
 const PERTURBED_TAIL = `
@@ -240,27 +273,45 @@ void main() {
 // CompiledPerturbation.isExact.
 const PERTURBED_MAIN_REBASE = `
 vec3 computePixelPerturbed(vec2 dw) {
-  vec2 dz = delta_z0(dw);
-  vec2 w_full = u_wRef + dw;
   float bailout2 = u_bailout * u_bailout;
   bool escaped = false;
   bool numericFailure = false;
   int iter = 0;
   vec2 z_full = vec2(0.0);
+  int lastIndex = u_maxIter - 1;
+  // Where this pixel's loop actually starts — 0 normally, or u_saSkip when
+  // the series-approximation table covers this pixel's dw (within the
+  // table's guaranteed radius u_saMaxDw2) and the jump lands somewhere
+  // finite. A jump that's wrong would be worse than one that's merely slow,
+  // so any hint of trouble (NaN/Inf, or dw outside the table's radius) just
+  // falls back to the ordinary i=0 start.
+  int startI = 0;
+  vec2 dz;
+  if (u_saSkip > 0 && dot(dw, dw) <= u_saMaxDw2) {
+    vec2 dzJump = saEval(dw);
+    if (!any(isnan(dzJump)) && !any(isinf(dzJump))) {
+      dz = dzJump;
+      startI = min(u_saSkip, lastIndex);
+    } else {
+      dz = delta_z0(dw);
+    }
+  } else {
+    dz = delta_z0(dw);
+  }
+  vec2 w_full = u_wRef + dw;
   // The reference-orbit index a pixel is tracking its delta against. Usually
   // equal to the true iteration count i, but rebasing can reset it back to 0
   // without resetting i — see below.
-  int refIndex = 0;
-  int lastIndex = u_maxIter - 1;
+  int refIndex = startI;
   // Carries the already-fetched reference-orbit value forward each
   // iteration, so the rebase check's lookahead fetch below doubles as the
   // next iteration's fetch instead of the same texel being fetched twice —
   // keeps this at one texelFetch per iteration in the common case, with a
   // second fetch only on the rare iteration where a rebase actually fires.
-  vec2 Z = texelFetch(u_refOrbit, ivec2(0, 0), 0).xy;
-  ${PERIODICITY_INIT}
+  vec2 Z = texelFetch(u_refOrbit, ivec2(refIndex, 0), 0).xy;
+  ${PERIODICITY_INIT('startI')}
 
-  for (int i = 0; i < 100000; i++) {
+  for (int i = startI; i < 100000; i++) {
     if (i >= u_maxIter) break;
     iter = i;
     z_full = Z + dz;
@@ -310,7 +361,7 @@ vec3 computePixelPerturbed(vec2 dw) {
   bool numericFailure = false;
   int iter = 0;
   vec2 z_full = vec2(0.0);
-  ${PERIODICITY_INIT}
+  ${PERIODICITY_INIT('0')}
 
   for (int i = 0; i < 100000; i++) {
     if (i >= u_maxIter) break;

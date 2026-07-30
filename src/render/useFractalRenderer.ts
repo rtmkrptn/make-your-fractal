@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Decimal from 'decimal.js'
 import { VERTEX_SHADER, buildFragmentShader } from './shaderTemplate'
 import { Expr } from '../dsl/ast'
+import { SERIES_ORDER } from '../dsl/perturbation'
 import { OrbitRequest, OrbitResponse } from './orbitWorker'
 
 // view.cx/cy themselves need to survive arbitrarily deep zoom (the reference
@@ -133,6 +134,8 @@ const PERTURBED_UNIFORMS = [
   'u_cDrift',
   'u_colorScheme',
   'u_refOrbit',
+  'u_saSkip',
+  'u_saMaxDw2',
 ]
 
 function buildProgram(gl: WebGL2RenderingContext, fragSource: string, uniformNames: string[]): ProgramBundle {
@@ -171,6 +174,12 @@ export function useFractalRenderer(
   const refPointRef = useRef<{ re: number; im: number } | null>(null)
   const refPointDRef = useRef<{ re: ViewDecimalInstance; im: ViewDecimalInstance } | null>(null)
   const refCRef = useRef<{ re: number; im: number } | null>(null)
+  // Series-approximation table for the currently-uploaded reference orbit —
+  // see computeSeriesApproximation in perturbation.ts. saSkipRef <= 0 means
+  // "don't use it" (no table yet, or the last computed one found no safe skip).
+  const saCoeffsRef = useRef<Float32Array>(new Float32Array(SERIES_ORDER * 2))
+  const saSkipRef = useRef(0)
+  const saMaxDw2Ref = useRef(0)
   const compiledRef = useRef<CompiledPipeline | null>(null)
   const workerRef = useRef<Worker | null>(null)
   const orbitRequestIdRef = useRef(0)
@@ -288,6 +297,9 @@ export function useFractalRenderer(
       // every draw() from the full-precision cxDRef/refPointDRef.
       refPointRef.current = { re: refD.re.toNumber(), im: refD.im.toNumber() }
       refCRef.current = res.c
+      saCoeffsRef.current = res.saCoeffs
+      saSkipRef.current = res.saSkip
+      saMaxDw2Ref.current = res.maxDw * res.maxDw
       refOrbitReadyRef.current = true
       setUsingPerturbation(true)
       drawRef.current()
@@ -310,6 +322,14 @@ export function useFractalRenderer(
     const v = viewRef.current
     const p = paramsRef.current
     const precisionDigits = Math.max(20, Math.min(300, Math.ceil(-Math.log10(v.scale)) + 15))
+    const canvas = canvasRef.current
+    const aspect = canvas && canvas.height > 0 ? canvas.width / canvas.height : 1
+    // Half-diagonal of the viewport in world units, from the reference point
+    // this settle is about to center on — the farthest any pixel's dw can be
+    // right after upload. The 25% margin covers drift accumulated by
+    // panning/zooming between this settle and the next (u_centerDrift adds
+    // onto dw, but the series table isn't rebuilt until then).
+    const maxDw = v.scale * Math.sqrt(aspect * aspect + 1) * 1.25
     const request: OrbitRequest = {
       id: ++orbitRequestIdRef.current,
       fExpr: pert.fExpr,
@@ -318,6 +338,8 @@ export function useFractalRenderer(
       c: p.juliaC,
       maxIter: p.maxIter,
       precisionDigits,
+      bailout: p.bailout,
+      maxDw,
     }
     worker.postMessage(request)
   }, [])
@@ -346,6 +368,9 @@ export function useFractalRenderer(
           buildFragmentShader(compiled.userGlsl, compiled.perturbation.glsl, compiled.perturbation.isExact),
           PERTURBED_UNIFORMS,
         )
+        // Array uniforms need their first element's location, not the bare
+        // name — getUniformLocation(..., 'u_saCoeffs') alone returns null.
+        newPerturbed.uniforms.u_saCoeffs = gl.getUniformLocation(newPerturbed.program, 'u_saCoeffs[0]')
       } catch (e) {
         console.warn('Perturbation shader failed to compile; deep zoom will stay at plain float32 depth.', e)
       }
@@ -369,6 +394,7 @@ export function useFractalRenderer(
     refOrbitReadyRef.current = false
     refPointRef.current = null
     refPointDRef.current = null
+    saSkipRef.current = 0
 
     setGlError(null)
     setIsReady(true)
@@ -428,6 +454,9 @@ export function useFractalRenderer(
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, refOrbitTextureRef.current)
       gl.uniform1i(u.u_refOrbit, 0)
+      gl.uniform1i(u.u_saSkip, saSkipRef.current)
+      gl.uniform1f(u.u_saMaxDw2, saMaxDw2Ref.current)
+      gl.uniform2fv(u.u_saCoeffs, saCoeffsRef.current)
     } else {
       gl.uniform2f(u.u_center, v.cx, v.cy)
     }
@@ -629,6 +658,7 @@ export function useFractalRenderer(
     refPointRef.current = null
     refPointDRef.current = null
     refOrbitReadyRef.current = false
+    saSkipRef.current = 0
     if (compiledRef.current?.perturbation && paramsRef.current.renderMode === 'deepZoom') updateReferenceOrbitRef.current()
     draw()
   }, [draw])
