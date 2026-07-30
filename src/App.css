@@ -98,6 +98,50 @@ body,
   }
 }
 
+.view-hud {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 240px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.view-hud-row {
+  display: flex;
+  gap: 8px;
+  font-family: var(--fontStack-monospace);
+}
+
+.view-hud-label {
+  color: rgba(255, 255, 255, 0.55);
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.view-hud-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-hud-compare {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .precision-badge-wrap {
   position: absolute;
   right: 14px;

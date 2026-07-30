@@ -276,11 +276,18 @@ export interface ReferenceOrbit {
  * ever *multiplied* against tiny deltas in the shader, never added to
  * something astronomically bigger, so it doesn't need extended precision
  * itself — only the one-time computation of Z_n does).
+ *
+ * `wRef` is passed as decimal strings, not `number` — the anchor point itself
+ * needs as many significant digits as the reference orbit's own math (up to
+ * ~300), which a float64 can't hold once zoomed past ~1e-16. The caller
+ * (useFractalRenderer's view-center accumulator) is what actually carries
+ * that precision; a plain JS number here would silently truncate it away
+ * before this function ever saw it.
  */
 export function computeReferenceOrbit(
   fExpr: Expr,
   z0Expr: Expr,
-  wRef: { re: number; im: number },
+  wRef: { re: string; im: string },
   c: { re: number; im: number },
   maxIter: number,
   precisionDigits: number,

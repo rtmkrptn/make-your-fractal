@@ -1,12 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Decimal from 'decimal.js'
 import { VERTEX_SHADER, buildFragmentShader } from './shaderTemplate'
 import { Expr } from '../dsl/ast'
 import { OrbitRequest, OrbitResponse } from './orbitWorker'
+
+// view.cx/cy themselves need to survive arbitrarily deep zoom (the reference
+// orbit is computed at up to 300 decimal digits — see MIN_SCALE_ELIGIBLE), so
+// plain `number` (float64, ~15-17 significant digits) isn't enough: once
+// v.scale shrinks past roughly float64's relative epsilon for cx's magnitude,
+// pan/zoom-recenter deltas become too small to change cx at all and dragging
+// silently stops doing anything. A dedicated Decimal clone (independent of
+// any other decimal.js usage, e.g. perturbation.ts's worker-side precision
+// bumps) tracks the true center; plain `.cx`/`.cy` are kept as a `.toNumber()`
+// mirror for the (float64-limited-anyway) plain-precision render path and for
+// external consumers (getView, presets, share links).
+const ViewDecimal = Decimal.clone({ precision: 340 })
+type ViewDecimalInstance = InstanceType<typeof ViewDecimal>
 
 export interface ViewState {
   cx: number
   cy: number
   scale: number // half-height of the visible complex-plane window
+}
+
+// Full-precision view snapshot for display (ViewHud) — cx/cy as decimal
+// strings (not lossy float64) so coordinates stay meaningful at deep zoom,
+// where the true drift since the last settle is far smaller than a float64
+// ULP of cx/cy's own magnitude. See the ViewDecimal comment above for why.
+export interface PreciseView {
+  cx: string
+  cy: string
+  scale: number
 }
 
 /** When present, the current formula is perturbation-eligible: `glsl` defines delta_f/delta_z0, and fExpr/z0Expr are the raw ASTs needed to (re)compute a reference orbit at an arbitrary point. */
@@ -50,9 +74,11 @@ export interface FractalRenderer {
   resetView: () => void
   downloadPNG: (filename?: string) => void
   getView: () => ViewState
+  /** Subscribe to (imperative, high-frequency) view updates for a HUD — returns an unsubscribe function. Kept out of React state so panning/zooming doesn't re-render the whole tree; the caller owns wherever it stores the value. */
+  subscribeView: (cb: (v: PreciseView) => void) => () => void
 }
 
-const DEFAULT_VIEW: ViewState = { cx: -0.5, cy: 0, scale: 1.5 }
+export const DEFAULT_VIEW: ViewState = { cx: -0.5, cy: 0, scale: 1.5 }
 const MIN_SCALE_ELIGIBLE = 1e-290 // perturbation has no real depth limit; this is just a sane self-imposed floor
 const MIN_SCALE_PLAIN = 1e-6 // plain float32 depth limit — no fallback for non-eligible formulas
 const MAX_SCALE = 8
@@ -143,17 +169,24 @@ export function useFractalRenderer(
   const refOrbitTextureRef = useRef<WebGLTexture | null>(null)
   const refOrbitReadyRef = useRef(false)
   const refPointRef = useRef<{ re: number; im: number } | null>(null)
+  const refPointDRef = useRef<{ re: ViewDecimalInstance; im: ViewDecimalInstance } | null>(null)
   const refCRef = useRef<{ re: number; im: number } | null>(null)
   const compiledRef = useRef<CompiledPipeline | null>(null)
   const workerRef = useRef<Worker | null>(null)
   const orbitRequestIdRef = useRef(0)
 
   const viewRef = useRef<ViewState>({ ...initialView })
+  // The true (arbitrary-precision) view center — see the comment on
+  // ViewDecimal above. viewRef.current.cx/cy are kept as a `.toNumber()`
+  // mirror of these, updated on every pan/zoom step.
+  const cxDRef = useRef<ViewDecimalInstance>(new ViewDecimal(initialView.cx))
+  const cyDRef = useRef<ViewDecimalInstance>(new ViewDecimal(initialView.cy))
   const initialViewRef = useRef(initialView)
   const paramsRef = useRef(params)
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const drawRef = useRef<() => void>(() => {})
   const updateReferenceOrbitRef = useRef<() => void>(() => {})
+  const viewListenersRef = useRef<Set<(v: PreciseView) => void>>(new Set())
 
   const [glError, setGlError] = useState<string | null>(null)
   const [isReady, setIsReady] = useState(false)
@@ -247,7 +280,13 @@ export function useFractalRenderer(
       }
       gl.bindTexture(gl.TEXTURE_2D, tex)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, res.count, 1, 0, gl.RG, gl.FLOAT, data)
-      refPointRef.current = res.wRef
+      const refD = { re: new ViewDecimal(res.wRef.re), im: new ViewDecimal(res.wRef.im) }
+      refPointDRef.current = refD
+      // u_wRef only needs to be a "close enough" float32 anchor (it's never
+      // added to anything astronomically bigger on the GPU — see
+      // shaderTemplate.ts); the precise part is u_centerDrift, computed fresh
+      // every draw() from the full-precision cxDRef/refPointDRef.
+      refPointRef.current = { re: refD.re.toNumber(), im: refD.im.toNumber() }
       refCRef.current = res.c
       refOrbitReadyRef.current = true
       setUsingPerturbation(true)
@@ -275,7 +314,7 @@ export function useFractalRenderer(
       id: ++orbitRequestIdRef.current,
       fExpr: pert.fExpr,
       z0Expr: pert.z0Expr,
-      wRef: { re: v.cx, im: v.cy },
+      wRef: { re: cxDRef.current.toString(), im: cyDRef.current.toString() },
       c: p.juliaC,
       maxIter: p.maxIter,
       precisionDigits,
@@ -329,6 +368,7 @@ export function useFractalRenderer(
     programsRef.current = { plain: newPlain, perturbed: newPerturbed }
     refOrbitReadyRef.current = false
     refPointRef.current = null
+    refPointDRef.current = null
 
     setGlError(null)
     setIsReady(true)
@@ -375,9 +415,14 @@ export function useFractalRenderer(
 
     if (usePerturbed) {
       const ref = refPointRef.current!
+      const refD = refPointDRef.current!
       const cRef = refCRef.current!
       gl.uniform2f(u.u_wRef, ref.re, ref.im)
-      gl.uniform2f(u.u_centerDrift, v.cx - ref.re, v.cy - ref.im)
+      // Computed from the full-precision accumulators, not v.cx/v.cy — at
+      // deep zoom the true drift since the last settle can be far smaller
+      // than a float64 ULP of the center's magnitude, and v.cx - ref.re would
+      // silently round to 0.
+      gl.uniform2f(u.u_centerDrift, cxDRef.current.minus(refD.re).toNumber(), cyDRef.current.minus(refD.im).toNumber())
       gl.uniform2f(u.u_cRef, cRef.re, cRef.im)
       gl.uniform2f(u.u_cDrift, p.juliaC.re - cRef.re, p.juliaC.im - cRef.im)
       gl.activeTexture(gl.TEXTURE0)
@@ -388,6 +433,15 @@ export function useFractalRenderer(
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    if (viewListenersRef.current.size > 0) {
+      // Decimal places grow with depth so coordinates stay meaningful deep
+      // into perturbation territory, capped so the string doesn't become
+      // unwieldy long before MIN_SCALE_ELIGIBLE.
+      const decimalPlaces = Math.min(60, Math.max(6, Math.ceil(-Math.log10(v.scale)) + 6))
+      const pv: PreciseView = { cx: cxDRef.current.toFixed(decimalPlaces), cy: cyDRef.current.toFixed(decimalPlaces), scale: v.scale }
+      viewListenersRef.current.forEach((cb) => cb(pv))
+    }
   }, [])
   drawRef.current = draw
 
@@ -442,6 +496,21 @@ export function useFractalRenderer(
     const activePointers = new Map<number, { x: number; y: number }>()
     let pinch: { dist: number; midX: number; midY: number } | null = null
 
+    // Accumulates a pan/recenter step into the full-precision center instead
+    // of `v.cx +=`/`-=` directly — at deep zoom the step can be many orders
+    // of magnitude smaller than a float64 ULP of cx's own magnitude, so a
+    // plain += would just round back to the same value and silently eat the
+    // gesture (the reported "drag stops working after sustained deep-zoom
+    // scrolling" bug). dcx/dcy are themselves ordinary numbers — they don't
+    // need extra precision of their own, only to not get swallowed on entry.
+    const applyPan = (dcx: number, dcy: number) => {
+      const v = viewRef.current
+      cxDRef.current = cxDRef.current.plus(dcx)
+      cyDRef.current = cyDRef.current.plus(dcy)
+      v.cx = cxDRef.current.toNumber()
+      v.cy = cyDRef.current.toNumber()
+    }
+
     const zoomAt = (clientX: number, clientY: number, factor: number) => {
       const rect = canvas.getBoundingClientRect()
       const uvx = (clientX - rect.left - 0.5 * rect.width) / rect.height
@@ -450,8 +519,7 @@ export function useFractalRenderer(
       const minScale =
         compiledRef.current?.perturbation && paramsRef.current.renderMode === 'deepZoom' ? MIN_SCALE_ELIGIBLE : MIN_SCALE_PLAIN
       const newScale = Math.min(MAX_SCALE, Math.max(minScale, v.scale * factor))
-      v.cx += uvx * 2 * (v.scale - newScale)
-      v.cy += uvy * 2 * (v.scale - newScale)
+      applyPan(uvx * 2 * (v.scale - newScale), uvy * 2 * (v.scale - newScale))
       v.scale = newScale
     }
 
@@ -488,8 +556,7 @@ export function useFractalRenderer(
           zoomAt(midX, midY, pinch.dist / dist)
           const dx = midX - pinch.midX
           const dy = midY - pinch.midY
-          v.cx -= (dx / rect.height) * v.scale * 2
-          v.cy += (dy / rect.height) * v.scale * 2
+          applyPan(-(dx / rect.height) * v.scale * 2, (dy / rect.height) * v.scale * 2)
           markInteraction()
         }
         pinch = { dist, midX, midY }
@@ -503,8 +570,7 @@ export function useFractalRenderer(
       lastX = e.clientX
       lastY = e.clientY
       const v = viewRef.current
-      v.cx -= (dx / rect.height) * v.scale * 2
-      v.cy += (dy / rect.height) * v.scale * 2
+      applyPan(-(dx / rect.height) * v.scale * 2, (dy / rect.height) * v.scale * 2)
       markInteraction()
     }
     const endDrag = (e: PointerEvent) => {
@@ -558,7 +624,10 @@ export function useFractalRenderer(
 
   const resetView = useCallback(() => {
     viewRef.current = { ...initialViewRef.current }
+    cxDRef.current = new ViewDecimal(initialViewRef.current.cx)
+    cyDRef.current = new ViewDecimal(initialViewRef.current.cy)
     refPointRef.current = null
+    refPointDRef.current = null
     refOrbitReadyRef.current = false
     if (compiledRef.current?.perturbation && paramsRef.current.renderMode === 'deepZoom') updateReferenceOrbitRef.current()
     draw()
@@ -573,6 +642,13 @@ export function useFractalRenderer(
   }, [viewResetSignal])
 
   const getView = useCallback(() => ({ ...viewRef.current }), [])
+
+  const subscribeView = useCallback((cb: (v: PreciseView) => void) => {
+    viewListenersRef.current.add(cb)
+    return () => {
+      viewListenersRef.current.delete(cb)
+    }
+  }, [])
 
   const downloadPNG = useCallback((filename = 'fractal.png') => {
     const canvas = canvasRef.current
@@ -590,7 +666,7 @@ export function useFractalRenderer(
   }, [draw])
 
   return useMemo(
-    () => ({ canvasRef, glError, isReady, usingPerturbation, resetView, downloadPNG, getView }),
-    [glError, isReady, usingPerturbation, resetView, downloadPNG, getView],
+    () => ({ canvasRef, glError, isReady, usingPerturbation, resetView, downloadPNG, getView, subscribeView }),
+    [glError, isReady, usingPerturbation, resetView, downloadPNG, getView, subscribeView],
   )
 }

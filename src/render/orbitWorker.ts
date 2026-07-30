@@ -13,7 +13,8 @@ export interface OrbitRequest {
   id: number
   fExpr: Expr
   z0Expr: Expr
-  wRef: { re: number; im: number }
+  // Decimal strings, not numbers — see computeReferenceOrbit's doc comment.
+  wRef: { re: string; im: string }
   c: { re: number; im: number }
   maxIter: number
   precisionDigits: number
@@ -21,7 +22,7 @@ export interface OrbitRequest {
 
 export interface OrbitResponse {
   id: number
-  wRef: { re: number; im: number }
+  wRef: { re: string; im: string }
   c: { re: number; im: number }
   zRe: Float32Array
   zIm: Float32Array

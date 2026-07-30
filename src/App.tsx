@@ -10,6 +10,7 @@ import { InlineMode } from './modes/InlineMode'
 import { PythonMode } from './modes/PythonMode'
 import { ControlsPanel } from './components/ControlsPanel'
 import { ErrorBanner } from './components/ErrorBanner'
+import { ViewHud } from './components/ViewHud'
 import { buildShareUrl, parseShareParams, ShareOptions } from './shareState'
 
 function useDebounced<T>(value: T, delayMs: number): T {
@@ -105,7 +106,7 @@ export default function App() {
     [maxIter, bailout, colorScheme, juliaC, renderMode],
   )
 
-  const { canvasRef, glError, resetView, downloadPNG, getView } = useFractalRenderer(
+  const { canvasRef, glError, resetView, downloadPNG, getView, subscribeView } = useFractalRenderer(
     pipelineToRender,
     params,
     view,
@@ -163,6 +164,7 @@ export default function App() {
             <span className="canvas-hint-mouse">Scroll to zoom · drag to pan</span>
             <span className="canvas-hint-touch">Pinch to zoom · drag to pan</span>
           </div>
+          <ViewHud subscribeView={subscribeView} referenceScale={view.scale} />
           <div className="precision-badge-wrap">
             <ThemeToggle />
             <div
