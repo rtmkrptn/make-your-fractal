@@ -6,6 +6,27 @@ export interface ShareOptions {
   includePalette: boolean
 }
 
+// Formula/code fields are base64url-encoded before going in the query
+// string. Fractal syntax leans hard on '*' (e.g. "z**2 + w"), and a raw '*'
+// or '**' in a shared link doesn't survive being pasted into chat apps that
+// treat it as markdown bold (Slack, Discord, Telegram, WhatsApp, ...) —
+// the asterisks get eaten by the renderer, silently corrupting the formula.
+// Base64url's alphabet is only [A-Za-z0-9_-], none of which trigger any
+// markdown formatting, so the payload survives any text medium intact.
+function toBase64Url(str: string): string {
+  const bytes = new TextEncoder().encode(str)
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function fromBase64Url(str: string): string {
+  const padded = str.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(str.length / 4) * 4, '=')
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
 export interface ShareableState {
   mode: Mode
   inline: InlineState
@@ -23,11 +44,11 @@ export function buildShareUrl(state: ShareableState, options: ShareOptions): str
   if (options.includeFractal) {
     params.set('m', state.mode === 'inline' ? 'i' : 'p')
     if (state.mode === 'inline') {
-      params.set('f', state.inline.f)
-      params.set('ru', state.inline.rule)
-      params.set('z0', state.inline.z0)
+      params.set('f', toBase64Url(state.inline.f))
+      params.set('ru', toBase64Url(state.inline.rule))
+      params.set('z0', toBase64Url(state.inline.z0))
     } else {
-      params.set('src', state.python)
+      params.set('src', toBase64Url(state.python))
     }
     params.set('cre', String(state.juliaC.re))
     params.set('cim', String(state.juliaC.im))
@@ -71,21 +92,26 @@ export function parseShareParams(search: string): ParsedShareState {
   const params = new URLSearchParams(search)
   const result: ParsedShareState = {}
 
-  const m = params.get('m')
-  if (m === 'i') {
-    const f = params.get('f')
-    const ru = params.get('ru')
-    const z0 = params.get('z0')
-    if (f !== null && ru !== null && z0 !== null) {
-      result.mode = 'inline'
-      result.inline = { f, rule: ru, z0 }
+  try {
+    const m = params.get('m')
+    if (m === 'i') {
+      const f = params.get('f')
+      const ru = params.get('ru')
+      const z0 = params.get('z0')
+      if (f !== null && ru !== null && z0 !== null) {
+        result.mode = 'inline'
+        result.inline = { f: fromBase64Url(f), rule: fromBase64Url(ru), z0: fromBase64Url(z0) }
+      }
+    } else if (m === 'p') {
+      const src = params.get('src')
+      if (src !== null) {
+        result.mode = 'python'
+        result.python = fromBase64Url(src)
+      }
     }
-  } else if (m === 'p') {
-    const src = params.get('src')
-    if (src !== null) {
-      result.mode = 'python'
-      result.python = src
-    }
+  } catch {
+    // Malformed/truncated base64 (e.g. a link mangled or clipped in transit) —
+    // fall back to the default preset rather than crashing on garbage input.
   }
 
   const cre = parseNumber(params.get('cre'))
