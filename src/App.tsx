@@ -151,7 +151,7 @@ export default function App() {
           <canvas ref={canvasRef} />
           <a
             className="github-star-link"
-            href="https://github.com/rtmkrptn/makeyourfractal"
+            href="https://github.com/rtmkrptn/make-your-fractal"
             target="_blank"
             rel="noreferrer"
           >
