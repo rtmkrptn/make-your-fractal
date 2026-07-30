@@ -2,6 +2,7 @@
 
 [![Live demo](https://img.shields.io/badge/live_demo-rtmkrptn.github.io-3fb950?logo=github)](https://rtmkrptn.github.io/make-your-fractal/)
 [![Deploy to GitHub Pages](https://github.com/rtmkrptn/make-your-fractal/actions/workflows/deploy.yml/badge.svg)](https://github.com/rtmkrptn/make-your-fractal/actions/workflows/deploy.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/rtmkrptn/make-your-fractal?style=social)](https://github.com/rtmkrptn/make-your-fractal)
 
 Write down a formula, watch it become a fractal — live, on the GPU, pannable
@@ -138,3 +139,9 @@ npm run dev
 - Python-mode loops must have a literal, compile-time bound (`for i in
   range(50):`, not a variable) since GLSL has no recursion and shader loop
   unrolling needs a known trip count.
+
+## License
+
+[AGPL-3.0-or-later](LICENSE). If you host a modified version of this
+project as a service, the AGPL requires you to make the source of your
+modified version available to its users.
