@@ -1,0 +1,9 @@
+node_modules
+dist
+*.local
+.DS_Store
+.claude/settings.local.json
+tsconfig.tsbuildinfo
+.diag*.mjs
+.tmp-diag*.mjs
+scratchpad-diag*.png
