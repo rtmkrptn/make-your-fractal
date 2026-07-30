@@ -1,22 +1,51 @@
-# Fractal Forge
+# Make Your Fractal
+
+[![Live demo](https://img.shields.io/badge/live_demo-rtmkrptn.github.io-3fb950?logo=github)](https://rtmkrptn.github.io/make-your-fractal/)
+[![Deploy to GitHub Pages](https://github.com/rtmkrptn/make-your-fractal/actions/workflows/deploy.yml/badge.svg)](https://github.com/rtmkrptn/make-your-fractal/actions/workflows/deploy.yml)
+[![GitHub stars](https://img.shields.io/github/stars/rtmkrptn/make-your-fractal?style=social)](https://github.com/rtmkrptn/make-your-fractal)
+
+Write down a formula, watch it become a fractal — live, on the GPU, pannable
+and zoomable like Desmos or mandelbrot.site. No build step, no compiler on
+your machine: type `z**2 + w`, and a second later you're looking at the
+Mandelbrot set.
+
+**[→ Try it live](https://rtmkrptn.github.io/make-your-fractal/)**
+
+![Editing a formula live, zooming and panning, then switching to Python mode](docs/media/hero.gif)
+
+## What it does
 
 Define an escape-time fractal — z(n) = f(z(n-1), w), plus a boolean escape
-rule — and watch it render live on the GPU, pannable and zoomable like
-Desmos or mandelbrot.site.
+rule — in one of two ways:
 
-Two ways to define a fractal:
-
-- **Average mode** — fill in three inline expressions: `f(z, w, c, n)`,
-  `rule(z, w, c, n)`, and the starting value `z0(w, c)`.
-- **Nerd mode** — write real `def f(z, w, c, n):` / `def rule(...):`
+- **Inline mode** — fill in three short expressions: `f(z, w, c, n)`,
+  `rule(z, w, c, n)`, and the starting value `z0(w, c)`. Fastest way to riff
+  on a formula.
+- **Python mode** — write real `def f(z, w, c, n):` / `def rule(...):`
   (optionally `def z0(w, c):`) functions in a constrained Python-like
   language, with `if`/`elif`/`else`, bounded `for i in range(N):` loops, and
-  local variables. Import/export as a `.py` file.
+  local variables. Import/export as a `.py` file when you want to keep or
+  share a formula.
 
 Both modes compile to the same small typed AST (`src/dsl`), which is then
 transpiled to GLSL (`src/dsl/compiler.ts`) and run per-pixel in a WebGL2
 fragment shader (`src/render`) — that's what keeps pan/zoom smooth even
 though the user is effectively authoring the fractal's math from scratch.
+Change a single character in the formula and the whole render updates in
+real time, no reload.
+
+Six presets ship out of the box — Mandelbrot, Julia, Burning Ship, Multibrot,
+Tricorn, and an angle-ruled variant — plus a Python-only preset (`triple-step`)
+that shows off loops and locals. Swap between them, or between ten color
+palettes, and export the frame as a PNG, or copy a link that reproduces the
+exact formula/position/palette for someone else:
+
+![Cycling through presets and color palettes](docs/media/gallery.gif)
+
+Zoom and pan work the same whether you're on a trackpad, a mouse wheel, or a
+touchscreen — scroll or pinch to zoom, drag to pan.
+
+## Under the hood
 
 Rendering has two more tricks on top of the base escape-time loop:
 
@@ -39,7 +68,8 @@ Rendering has two more tricks on top of the base escape-time loop:
   `im()`/`complex()`, and unary minus — covers every built-in preset.
   Formulas using control flow, loops, comparisons inside `f`, or
   transcendentals fall back to plain float32 (~1e-6 depth). The UI's
-  precision badge (top-right of the canvas) shows which path is active.
+  precision toggle (top-right of the canvas, hover for the Simple/Deep
+  comparison) shows which path is active.
 - **Rebasing** (Zhuoran's method, as used in Fraktaler 3 and mandelbrot.site):
   a per-pixel delta is only a valid approximation while it stays small
   relative to the true orbit value there. Deep reference orbits have
@@ -76,8 +106,8 @@ npm run dev
   to only show the constant-`c` control when a formula actually reads it).
 - `src/render/` — the GLSL complex-math + palette library
   (`shaderTemplate.ts`), and the `useFractalRenderer` hook (WebGL2 setup,
-  reference-orbit texture upload, pan/zoom, PNG export).
-- `src/modes/` — the Average and Nerd mode UI panels; each shows a small
+  reference-orbit texture upload, pan/zoom/pinch, PNG export).
+- `src/modes/` — the Inline and Python mode UI panels; each shows a small
   draggable-point plane for the constant `c` (`components/ComplexPointField.tsx`)
   right below the starting-value field, but only once a formula references
   `c` — most presets don't (`c` is a Julia-style fixed parameter, not one of
@@ -105,6 +135,6 @@ npm run dev
   triggers by keeping the delta small in the first place, but doesn't
   eliminate it, since `abs()`'s own delta rule is approximate regardless of
   how close the reference orbit is.
-- Nerd-mode loops must have a literal, compile-time bound (`for i in
+- Python-mode loops must have a literal, compile-time bound (`for i in
   range(50):`, not a variable) since GLSL has no recursion and shader loop
   unrolling needs a known trip count.

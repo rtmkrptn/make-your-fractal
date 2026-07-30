@@ -1,4 +1,4 @@
-import { Mode, AverageState, ViewState } from './types'
+import { Mode, InlineState, ViewState } from './types'
 
 export interface ShareOptions {
   includeFractal: boolean
@@ -8,8 +8,8 @@ export interface ShareOptions {
 
 export interface ShareableState {
   mode: Mode
-  average: AverageState
-  nerd: string
+  inline: InlineState
+  python: string
   juliaC: { re: number; im: number }
   maxIter: number
   bailout: number
@@ -21,13 +21,13 @@ export function buildShareUrl(state: ShareableState, options: ShareOptions): str
   const params = new URLSearchParams()
 
   if (options.includeFractal) {
-    params.set('m', state.mode === 'average' ? 'a' : 'n')
-    if (state.mode === 'average') {
-      params.set('f', state.average.f)
-      params.set('ru', state.average.rule)
-      params.set('z0', state.average.z0)
+    params.set('m', state.mode === 'inline' ? 'i' : 'p')
+    if (state.mode === 'inline') {
+      params.set('f', state.inline.f)
+      params.set('ru', state.inline.rule)
+      params.set('z0', state.inline.z0)
     } else {
-      params.set('src', state.nerd)
+      params.set('src', state.python)
     }
     params.set('cre', String(state.juliaC.re))
     params.set('cim', String(state.juliaC.im))
@@ -52,8 +52,8 @@ export function buildShareUrl(state: ShareableState, options: ShareOptions): str
 
 export interface ParsedShareState {
   mode?: Mode
-  average?: AverageState
-  nerd?: string
+  inline?: InlineState
+  python?: string
   juliaC?: { re: number; im: number }
   maxIter?: number
   bailout?: number
@@ -72,19 +72,19 @@ export function parseShareParams(search: string): ParsedShareState {
   const result: ParsedShareState = {}
 
   const m = params.get('m')
-  if (m === 'a') {
+  if (m === 'i') {
     const f = params.get('f')
     const ru = params.get('ru')
     const z0 = params.get('z0')
     if (f !== null && ru !== null && z0 !== null) {
-      result.mode = 'average'
-      result.average = { f, rule: ru, z0 }
+      result.mode = 'inline'
+      result.inline = { f, rule: ru, z0 }
     }
-  } else if (m === 'n') {
+  } else if (m === 'p') {
     const src = params.get('src')
     if (src !== null) {
-      result.mode = 'nerd'
-      result.nerd = src
+      result.mode = 'python'
+      result.python = src
     }
   }
 

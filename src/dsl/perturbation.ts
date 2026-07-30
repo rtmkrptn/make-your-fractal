@@ -99,7 +99,7 @@ export interface PerturbableExprs {
   z0Expr: Expr
 }
 
-/** Extracts (f, z0) as eligible single-expression ASTs from a parsed Nerd-mode program, or null if not eligible. */
+/** Extracts (f, z0) as eligible single-expression ASTs from a parsed Python-mode program, or null if not eligible. */
 export function extractPerturbableFromProgram(source: string): PerturbableExprs | null {
   let program
   try {
@@ -119,8 +119,8 @@ export function extractPerturbableFromProgram(source: string): PerturbableExprs 
   return { fExpr, z0Expr }
 }
 
-/** Extracts (f, z0) as eligible single-expression ASTs from Average-mode's inline fields, or null if not eligible. */
-export function extractPerturbableFromAverage(fExprSrc: string, z0ExprSrc: string): PerturbableExprs | null {
+/** Extracts (f, z0) as eligible single-expression ASTs from Inline-mode's fields, or null if not eligible. */
+export function extractPerturbableFromInline(fExprSrc: string, z0ExprSrc: string): PerturbableExprs | null {
   let fExpr: Expr
   let z0Expr: Expr
   try {

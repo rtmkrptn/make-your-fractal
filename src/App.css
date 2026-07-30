@@ -202,8 +202,8 @@ body,
 
 /* Primer's fullWidth SegmentedControl sets flex-grow:1 on each item but
    leaves flex-basis:auto, so items only share the LEFTOVER space evenly —
-   an item with a longer label (e.g. "Average") keeps more of its natural
-   content width than a shorter one ("Nerd") even after growing. Forcing
+   an item with a longer label (e.g. "Python") keeps more of its natural
+   content width than a shorter one ("Inline") even after growing. Forcing
    flex-basis:0 makes flex-grow divide the full width evenly regardless of
    label length. */
 [aria-label='Mode'] > li[data-component='SegmentedControl.Button'] {

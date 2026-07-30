@@ -1,4 +1,4 @@
-// AST node definitions for the Fractal Forge DSL — a constrained, Python-flavored
+// AST node definitions for the Make Your Fractal DSL — a constrained, Python-flavored
 // language for defining complex-number iteration functions and escape rules.
 // Every node carries a source line for error reporting.
 

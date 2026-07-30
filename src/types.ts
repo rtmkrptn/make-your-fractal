@@ -1,4 +1,4 @@
-export type Mode = 'average' | 'nerd'
+export type Mode = 'inline' | 'python'
 
 export interface ViewState {
   cx: number
@@ -6,7 +6,7 @@ export interface ViewState {
   scale: number
 }
 
-export interface AverageState {
+export interface InlineState {
   f: string
   rule: string
   z0: string
@@ -16,8 +16,8 @@ export interface Preset {
   id: string
   name: string
   description: string
-  average: AverageState | null // null when the fractal needs nerd-mode-only features (loops, branching)
-  nerd: string
+  inline: InlineState | null // null when the fractal needs Python-mode-only features (loops, branching)
+  python: string
   view: ViewState
   maxIter: number
   bailout: number

@@ -1,18 +1,18 @@
 import { TextInput } from '@primer/react'
-import { AverageState } from '../types'
+import { InlineState } from '../types'
 import { usesIdentifier } from '../dsl/usesIdentifier'
 import { ComplexPointField } from '../components/ComplexPointField'
 import { Reference } from '../components/Reference'
 
 interface Props {
-  value: AverageState
-  onChange: (next: AverageState) => void
+  value: InlineState
+  onChange: (next: InlineState) => void
   juliaC: { re: number; im: number }
   onJuliaCChange: (v: { re: number; im: number }) => void
 }
 
-export function AverageMode({ value, onChange, juliaC, onJuliaCChange }: Props) {
-  const set = (key: keyof AverageState) => (e: React.ChangeEvent<HTMLInputElement>) =>
+export function InlineMode({ value, onChange, juliaC, onJuliaCChange }: Props) {
+  const set = (key: keyof InlineState) => (e: React.ChangeEvent<HTMLInputElement>) =>
     onChange({ ...value, [key]: e.target.value })
 
   const usesC = [value.f, value.rule, value.z0].some((expr) => usesIdentifier(expr, 'c'))

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconButton, SegmentedControl, useTheme } from '@primer/react'
 import { SunIcon, MoonIcon, MarkGithubIcon, StarIcon } from '@primer/octicons-react'
-import { Mode, AverageState } from './types'
+import { Mode, InlineState } from './types'
 import { PRESETS, DEFAULT_PRESET } from './examples/presets'
-import { compileAverageMode, compileProgram } from './dsl/compiler'
-import { extractPerturbableFromAverage, extractPerturbableFromProgram, compilePerturbation } from './dsl/perturbation'
+import { compileInlineMode, compileProgram } from './dsl/compiler'
+import { extractPerturbableFromInline, extractPerturbableFromProgram, compilePerturbation } from './dsl/perturbation'
 import { useFractalRenderer, CompiledPipeline, RenderMode } from './render/useFractalRenderer'
-import { AverageMode } from './modes/AverageMode'
-import { NerdMode } from './modes/NerdMode'
+import { InlineMode } from './modes/InlineMode'
+import { PythonMode } from './modes/PythonMode'
 import { ControlsPanel } from './components/ControlsPanel'
 import { ErrorBanner } from './components/ErrorBanner'
 import { buildShareUrl, parseShareParams, ShareOptions } from './shareState'
@@ -40,10 +40,10 @@ export default function App() {
   // params — whatever isn't present just falls back to the default preset.
   const shared = useMemo(() => parseShareParams(window.location.search), [])
 
-  const [mode, setMode] = useState<Mode>(shared.mode ?? 'average')
+  const [mode, setMode] = useState<Mode>(shared.mode ?? 'inline')
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_PRESET.id)
-  const [averageState, setAverageState] = useState<AverageState>(shared.average ?? DEFAULT_PRESET.average!)
-  const [nerdSource, setNerdSource] = useState(shared.nerd ?? DEFAULT_PRESET.nerd)
+  const [inlineState, setInlineState] = useState<InlineState>(shared.inline ?? DEFAULT_PRESET.inline!)
+  const [pythonSource, setPythonSource] = useState(shared.python ?? DEFAULT_PRESET.python)
   const [view, setView] = useState(shared.view ?? DEFAULT_PRESET.view)
   const [viewResetSignal, setViewResetSignal] = useState(0)
   const [maxIter, setMaxIter] = useState(shared.maxIter ?? DEFAULT_PRESET.maxIter)
@@ -58,8 +58,8 @@ export default function App() {
   // mouseenter/leave don't have that gap.
   const [showRenderModeTip, setShowRenderModeTip] = useState(false)
 
-  const debouncedAverage = useDebounced(averageState, 250)
-  const debouncedNerd = useDebounced(nerdSource, 250)
+  const debouncedInline = useDebounced(inlineState, 250)
+  const debouncedPython = useDebounced(pythonSource, 250)
 
   // Compiles the plain (always-available) GLSL, and separately checks whether
   // the formula is simple enough (single expression, no loops/branches) for
@@ -68,14 +68,14 @@ export default function App() {
   const compiled = useMemo(() => {
     try {
       const plain =
-        mode === 'average'
-          ? compileAverageMode(debouncedAverage.f, debouncedAverage.rule, debouncedAverage.z0)
-          : compileProgram(debouncedNerd)
+        mode === 'inline'
+          ? compileInlineMode(debouncedInline.f, debouncedInline.rule, debouncedInline.z0)
+          : compileProgram(debouncedPython)
 
       const perturbable =
-        mode === 'average'
-          ? extractPerturbableFromAverage(debouncedAverage.f, debouncedAverage.z0)
-          : extractPerturbableFromProgram(debouncedNerd)
+        mode === 'inline'
+          ? extractPerturbableFromInline(debouncedInline.f, debouncedInline.z0)
+          : extractPerturbableFromProgram(debouncedPython)
 
       let perturbation: CompiledPipeline['perturbation'] = null
       if (perturbable) {
@@ -92,7 +92,7 @@ export default function App() {
     } catch (e) {
       return { pipeline: null as CompiledPipeline | null, error: e instanceof Error ? e.message : String(e) }
     }
-  }, [mode, debouncedAverage, debouncedNerd])
+  }, [mode, debouncedInline, debouncedPython])
 
   const lastGoodRef = useRef<CompiledPipeline | null>(null)
   useEffect(() => {
@@ -116,11 +116,11 @@ export default function App() {
     const preset = PRESETS.find((p) => p.id === id)
     if (!preset) return
     setSelectedPresetId(id)
-    setNerdSource(preset.nerd)
-    if (preset.average) {
-      setAverageState(preset.average)
-    } else if (mode === 'average') {
-      setMode('nerd')
+    setPythonSource(preset.python)
+    if (preset.inline) {
+      setInlineState(preset.inline)
+    } else if (mode === 'inline') {
+      setMode('python')
     }
     setView(preset.view)
     setMaxIter(preset.maxIter)
@@ -132,11 +132,11 @@ export default function App() {
 
   const handleShare = (options: ShareOptions) => {
     const url = buildShareUrl(
-      { mode, average: averageState, nerd: nerdSource, juliaC, maxIter, bailout, view: getView(), colorScheme },
+      { mode, inline: inlineState, python: pythonSource, juliaC, maxIter, bailout, view: getView(), colorScheme },
       options,
     )
     if (navigator.share) {
-      navigator.share({ title: 'Fractal Forge', url }).catch(() => {})
+      navigator.share({ title: 'Make Your Fractal', url }).catch(() => {})
     } else {
       navigator.clipboard.writeText(url).catch(() => {})
     }
@@ -207,22 +207,22 @@ export default function App() {
         </div>
 
         <aside className="sidebar">
-          <SegmentedControl aria-label="Mode" onChange={(i) => setMode(i === 0 ? 'average' : 'nerd')} fullWidth>
-            <SegmentedControl.Button selected={mode === 'average'}>Inline</SegmentedControl.Button>
-            <SegmentedControl.Button selected={mode === 'nerd'}>Python</SegmentedControl.Button>
+          <SegmentedControl aria-label="Mode" onChange={(i) => setMode(i === 0 ? 'inline' : 'python')} fullWidth>
+            <SegmentedControl.Button selected={mode === 'inline'}>Inline</SegmentedControl.Button>
+            <SegmentedControl.Button selected={mode === 'python'}>Python</SegmentedControl.Button>
           </SegmentedControl>
 
           <ErrorBanner message={displayError} />
 
-          {mode === 'average' ? (
-            <AverageMode
-              value={averageState}
-              onChange={setAverageState}
+          {mode === 'inline' ? (
+            <InlineMode
+              value={inlineState}
+              onChange={setInlineState}
               juliaC={juliaC}
               onJuliaCChange={setJuliaC}
             />
           ) : (
-            <NerdMode value={nerdSource} onChange={setNerdSource} juliaC={juliaC} onJuliaCChange={setJuliaC} />
+            <PythonMode value={pythonSource} onChange={setPythonSource} juliaC={juliaC} onJuliaCChange={setJuliaC} />
           )}
 
           <ControlsPanel

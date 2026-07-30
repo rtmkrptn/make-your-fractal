@@ -12,7 +12,7 @@ interface Props {
   onJuliaCChange: (v: { re: number; im: number }) => void
 }
 
-export function NerdMode({ value, onChange, juliaC, onJuliaCChange }: Props) {
+export function PythonMode({ value, onChange, juliaC, onJuliaCChange }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Every function signature spells out `c` as a parameter (`def f(z, w, c,

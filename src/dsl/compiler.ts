@@ -557,7 +557,7 @@ function compileNamedFunction(fn: FunctionDef, paramNames: string[], paramTypes:
   return [`${glslTypeName(returnType)} ${glslName}(${sig}) {`, ...bodyLines.map(indent), '}'].join('\n')
 }
 
-/** Compiles a full Nerd-mode program (must define f and rule; z0 is optional). */
+/** Compiles a full Python-mode program (must define f and rule; z0 is optional). */
 export function compileProgram(source: string): CompiledFractal {
   const program: Program = parseProgram(source)
 
@@ -578,13 +578,13 @@ export function compileProgram(source: string): CompiledFractal {
 }
 
 /**
- * Compiles Average-mode inline expressions into the same GLSL shape Nerd mode
+ * Compiles Inline-mode expressions into the same GLSL shape Python mode
  * produces. `fExprSrc` is the *complete* right-hand side of z(n) = f(z(n-1))
  * (e.g. "z**2 + w" for Mandelbrot, "z**2 + c" for a Julia set with z0 = w) —
  * it is used as-is, not auto-wrapped, so the same three fields can express
  * either style depending on what the user references.
  */
-export function compileAverageMode(fExprSrc: string, ruleExprSrc: string, z0ExprSrc: string): CompiledFractal {
+export function compileInlineMode(fExprSrc: string, ruleExprSrc: string, z0ExprSrc: string): CompiledFractal {
   const fExpr = parseSingleExpr(fExprSrc)
   const ruleExpr = parseSingleExpr(ruleExprSrc)
   const z0Expr = parseSingleExpr(z0ExprSrc)

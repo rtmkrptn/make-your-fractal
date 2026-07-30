@@ -156,6 +156,13 @@ class Parser {
     return this.parseTernary()
   }
 
+  /** Rejects anything left over after an expression — e.g. a stray '=' from an accidental assignment. */
+  expectExprEnd(): void {
+    if (this.at('NEWLINE') || this.at('EOF')) return
+    const t = this.peek()
+    throw new DslError(`unexpected '${t.value || t.type}' after expression`, t.line)
+  }
+
   private parseTernary(): Expr {
     const line = this.peek().line
     const thenBranch = this.parseOr()
@@ -317,13 +324,14 @@ export function parseProgram(source: string): Program {
   return new Parser(tokens).parseProgram()
 }
 
-/** Parses a single standalone expression (used for Average-mode inline fields). */
+/** Parses a single standalone expression (used for Inline-mode fields). */
 export function parseSingleExpr(source: string, line = 1): Expr {
-  // Average-mode fields are one-liners with no indentation structure, so we
+  // Inline-mode fields are one-liners with no indentation structure, so we
   // synthesize just enough token stream to reuse the same expression grammar.
   const tokens = tokenize(source.trim() + '\n')
   const p = new Parser(tokens)
   const expr = p.parseExpr()
+  p.expectExprEnd()
   void line
   return expr
 }
